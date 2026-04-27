@@ -29,7 +29,8 @@ Implemented tasks:
 - Task 1: `helloworld` user program.
 - Task 2: `memsize()` system call and `memsize_test`.
 - Task 3: `co_yield(pid, value)` system call and `co_test`.
-- Extra helper: `co_error_test`, for manual error-case checks.
+- Extra helper: `co_error_test`, for manual error-case checks. This is useful
+  for us, but it is not required for the final Moodle submission.
 
 Important commands:
 
@@ -230,6 +231,7 @@ Main files:
 
 - `user/co_error_test.c`
   - Extra test program for error cases.
+  - Good for local testing, but not required by the assignment.
 
 ## How xv6 System Calls Work
 
@@ -796,33 +798,253 @@ care about.
 
 ## Final Submission Checklist
 
+Short answer:
+
+Submit the full xv6 source tree with our assignment changes, but do not include
+our study/admin files.
+
+So yes, conceptually it is:
+
+```text
+the whole xv6 codebase
+minus files that are only for us, like the study README, Moodle Q&A, PDF, and agent notes
+minus build artifacts
+```
+
+Do not submit only the files we changed. The grader should receive an xv6 tree
+that can be built normally with `make qemu`.
+
+### Files That Must Be In The Submission
+
+The package should include the normal xv6 source tree, including:
+
+```text
+Makefile
+LICENSE
+README
+kernel/
+mkfs/
+user/
+```
+
+It must include our assignment source changes:
+
+```text
+Makefile
+kernel/defs.h
+kernel/proc.c
+kernel/syscall.c
+kernel/syscall.h
+kernel/sysproc.c
+user/user.h
+user/usys.pl
+user/helloworld.c
+user/memsize_test.c
+user/co_test.c
+```
+
+`user/co_test.c` is important because the assignment explicitly asks for the
+test program.
+
+### Files To Exclude From The Submission
+
+These files are for studying, setup, or local workflow. They should not be in
+the final Moodle package:
+
+```text
+.git/
+ASSIGNMENT_README.md
+moodle_qa.md
+os262-assignment1.pdf
+agent.md
+```
+
+These are also not needed for grading:
+
+```text
+.devcontainer/
+.vscode/
+```
+
+Build artifacts should also be excluded. Running `make clean` removes the
+important ones:
+
+```text
+fs.img
+kernel/kernel
+kernel/*.o
+kernel/*.d
+kernel/*.asm
+kernel/*.sym
+user/*.o
+user/*.d
+user/_*
+user/*.asm
+user/*.sym
+mkfs/mkfs
+```
+
+### What About `co_error_test.c`?
+
+`user/co_error_test.c` is our optional manual test. It is not required by the
+PDF.
+
+There are two acceptable choices:
+
+1. Keep it in the submission.
+
+   This is fine technically because it builds and does not change the required
+   behavior. If we keep it, the `Makefile` line:
+
+```make
+$U/_co_error_test\
+```
+
+   must also stay.
+
+2. Remove it from the final submission for a cleaner package.
+
+   If we remove `user/co_error_test.c`, we must also remove this line from
+   `UPROGS` in `Makefile`:
+
+```make
+$U/_co_error_test\
+```
+
+   Otherwise `make qemu` will fail because the Makefile will try to build a
+   program whose source file is missing.
+
+Our recommendation for the final Moodle package is the clean option:
+
+```text
+exclude user/co_error_test.c
+remove $U/_co_error_test\ from Makefile in the final submission copy
+```
+
+Do this only in the final packaging copy or final submission branch. Keep the
+test in our working branch if we still want it for checking.
+
+### Exact Final Packaging Steps
+
 Before submitting:
 
 1. Decide which branch implementation to use after comparing with the teammate.
-2. Merge the final version into the submission branch.
-3. Run:
+2. Merge the final version into the submission branch or create a final
+   packaging copy.
+3. If using the clean option, remove `co_error_test` from the final copy:
+
+```text
+delete user/co_error_test.c
+remove $U/_co_error_test\ from UPROGS in Makefile
+```
+
+4. Run:
 
 ```sh
 make clean
 make qemu
 ```
 
-4. In xv6, run:
+5. In xv6, run:
 
 ```text
 helloworld
 memsize_test
-co_error_test
 co_test
 ```
 
-5. Exit QEMU.
-6. Run:
+If `co_error_test` is still included in the final copy, it is also fine to run:
+
+```text
+co_error_test
+```
+
+6. Exit QEMU.
+7. Run:
 
 ```sh
 make clean
 ```
 
-7. Package the full xv6 source tree.
-8. Do not submit only changed files.
-9. Do not include build artifacts if `make clean` removed them.
+8. Create the ZIP/TAR from the cleaned source tree.
+9. Make sure the ZIP/TAR does not include:
+
+```text
+.git/
+ASSIGNMENT_README.md
+moodle_qa.md
+os262-assignment1.pdf
+agent.md
+.devcontainer/
+.vscode/
+build artifacts
+```
+
+10. Submit that package to Moodle.
+
+### Practical Packaging Command Sequence
+
+One clean way is to make a temporary copy outside the repo and zip that copy.
+
+From the parent directory of `xv6-riscv`:
+
+```sh
+rsync -a xv6-riscv/ xv6-riscv-submit/ \
+  --exclude='.git' \
+  --exclude='ASSIGNMENT_README.md' \
+  --exclude='moodle_qa.md' \
+  --exclude='os262-assignment1.pdf' \
+  --exclude='agent.md' \
+  --exclude='.devcontainer' \
+  --exclude='.vscode'
+```
+
+Then, inside the copied folder:
+
+```sh
+cd xv6-riscv-submit
+make clean
+```
+
+If we choose the clean option without `co_error_test`, also do this in the
+copied folder:
+
+```text
+delete user/co_error_test.c
+remove $U/_co_error_test\ from UPROGS in Makefile
+```
+
+Then verify the copied folder still builds:
+
+```sh
+make qemu
+```
+
+Inside xv6, run:
+
+```text
+helloworld
+memsize_test
+co_test
+```
+
+Exit QEMU, clean again, and zip:
+
+```sh
+make clean
+cd ..
+zip -r OSAssignment1.zip xv6-riscv-submit
+```
+
+The ZIP should contain `xv6-riscv-submit/` with the source code inside it.
+
+### Final Sanity Check
+
+Before uploading, unzip the package somewhere temporary and check:
+
+```sh
+make qemu
+```
+
+The important point is that the submitted folder should build on its own. If it
+only builds because of files outside the submitted ZIP, the package is wrong.

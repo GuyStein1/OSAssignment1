@@ -728,6 +728,63 @@ Note: `usertests` intentionally prints some `usertrap(): unexpected scause`
 messages during memory-protection tests. Those are expected as long as the
 test prints `OK` and eventually `ALL TESTS PASSED`.
 
+## Optional Local Tests
+
+We also keep extra tests in:
+
+```text
+local_tests/
+```
+
+These are not part of the assignment. They are for us when we change code and
+want a quick confidence check.
+
+The current local test is:
+
+```text
+local_tests/co_stress_test.c
+```
+
+It checks 2000 coroutine handoffs in two cases:
+
+- Parent reaches `co_yield` first.
+- Child reaches `co_yield` first.
+
+Normal builds do not include it:
+
+```sh
+make qemu
+```
+
+To include the optional test, run:
+
+```sh
+make clean
+EXTRA_TESTS=1 make qemu
+```
+
+Inside xv6:
+
+```text
+co_stress_test
+```
+
+Expected output:
+
+```text
+parent-first: passed 2000 handoffs
+child-first: passed 2000 handoffs
+co_stress_test: passed
+```
+
+After running optional tests:
+
+```sh
+make clean
+```
+
+For final Moodle submission, exclude `local_tests/`.
+
 ## Questions We Should Be Ready To Answer
 
 ### How does a system call differ from a normal function call?
@@ -857,6 +914,7 @@ ASSIGNMENT_README.md
 moodle_qa.md
 os262-assignment1.pdf
 agent.md
+local_tests/
 ```
 
 These are also not needed for grading:
@@ -977,6 +1035,7 @@ os262-assignment1.pdf
 agent.md
 .devcontainer/
 .vscode/
+local_tests/
 build artifacts
 ```
 
@@ -995,6 +1054,7 @@ rsync -a xv6-riscv/ xv6-riscv-submit/ \
   --exclude='moodle_qa.md' \
   --exclude='os262-assignment1.pdf' \
   --exclude='agent.md' \
+  --exclude='local_tests' \
   --exclude='.devcontainer' \
   --exclude='.vscode'
 ```

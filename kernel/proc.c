@@ -480,9 +480,11 @@ scheduler(void)
 static void*
 co_chan(struct proc *p)
 {
+  // Private channel: normal xv6 code does not sleep on this address.
   return (void*)&p->context;
 }
 
+// Returns with the matching process locked.
 static struct proc*
 find_proc(int pid)
 {
@@ -521,6 +523,7 @@ co_yield(int pid, int value)
   // state: chan marks the awaited peer, a1 holds the yielded value, and
   // a0 holds a pending return value once the peer has provided one.
   if(target->state == SLEEPING){
+    // The peer is ready, so exchange values and switch directly to it.
     if(target->chan != co_chan(p)){
       release(&target->lock);
       return -1;
@@ -553,6 +556,7 @@ co_yield(int pid, int value)
     return ret;
   }
 
+  // First side to arrive waits until the peer calls co_yield back.
   if(target->state != RUNNABLE && target->state != RUNNING){
     release(&target->lock);
     return -1;

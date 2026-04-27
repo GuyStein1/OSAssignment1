@@ -445,6 +445,7 @@ void
 scheduler(void)
 {
   struct proc *p;
+  struct proc *ran;
   struct cpu *c = mycpu();
   
   c->proc = 0;
@@ -464,11 +465,118 @@ scheduler(void)
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        // Direct co_yield switches can return a different process to
+        // this scheduler frame, so release the process currently on CPU.
+        ran = c->proc;
         c->proc = 0;
+        release(&ran->lock);
+      } else {
+        release(&p->lock);
       }
-      release(&p->lock);
     }
   }
+}
+
+static void*
+co_chan(struct proc *p)
+{
+  return (void*)&p->context;
+}
+
+static struct proc*
+find_proc(int pid)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED)
+      return p;
+    release(&p->lock);
+  }
+
+  return 0;
+}
+
+int
+co_yield(int pid, int value)
+{
+  struct proc *p = myproc();
+  struct proc *target;
+  int ret;
+
+  if(pid <= 0 || pid == p->pid)
+    return -1;
+
+  target = find_proc(pid);
+  if(target == 0)
+    return -1;
+
+  if(target->killed || target->state == UNUSED || target->state == ZOMBIE){
+    release(&target->lock);
+    return -1;
+  }
+
+  // co_yield cannot add process fields, so it reuses existing per-process
+  // state: chan marks the awaited peer, a1 holds the yielded value, and
+  // a0 holds a pending return value once the peer has provided one.
+  if(target->state == SLEEPING){
+    if(target->chan != co_chan(p)){
+      release(&target->lock);
+      return -1;
+    }
+
+    acquire(&p->lock);
+    if(p->killed){
+      release(&p->lock);
+      release(&target->lock);
+      return -1;
+    }
+
+    p->trapframe->a1 = value;
+    p->trapframe->a0 = target->trapframe->a1;
+    if(target->trapframe->a0 == (uint64)-1)
+      target->trapframe->a0 = value;
+
+    p->chan = co_chan(target);
+    p->state = SLEEPING;
+    target->state = RUNNING;
+    target->chan = 0;
+    mycpu()->proc = target;
+
+    release(&p->lock);
+    swtch(&p->context, &target->context);
+
+    ret = p->trapframe->a0;
+    p->chan = 0;
+    release(&p->lock);
+    return ret;
+  }
+
+  if(target->state != RUNNABLE && target->state != RUNNING){
+    release(&target->lock);
+    return -1;
+  }
+
+  acquire(&p->lock);
+  if(p->killed){
+    release(&p->lock);
+    release(&target->lock);
+    return -1;
+  }
+
+  p->trapframe->a1 = value;
+  p->trapframe->a0 = -1;
+  p->chan = co_chan(target);
+  p->state = SLEEPING;
+
+  release(&target->lock);
+  sched();
+
+  ret = p->trapframe->a0;
+  p->chan = 0;
+  release(&p->lock);
+  return ret;
 }
 
 // Switch to scheduler.  Must hold only p->lock

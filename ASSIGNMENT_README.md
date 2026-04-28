@@ -598,7 +598,7 @@ target is still chosen inside `co_yield`, and the handoff still uses direct
 
 ## Staff Clarification About Scheduler Changes
 
-The staff later clarified that:
+Outside the Moodle Q&A file, the staff later clarified that:
 
 - A working solution that crashes after a few iterations with `panic: release`
   will be accepted.
@@ -631,6 +631,9 @@ scheduler may not be the same process originally selected by the scheduler.
 So the scheduler releases c->proc, the process actually returning, instead of
 the old loop variable.
 ```
+
+This clarification is not one of the numbered entries in `moodle_qa.md`; it was
+published separately. If asked about it, do not say it came from the Moodle Q&A.
 
 ## Error Handling
 
@@ -671,6 +674,19 @@ In our direct handoff:
 - The current process lock is released before switching away.
 - This matches xv6's convention that a process resumes with its own lock held
   and then releases it in the normal resume path.
+
+The lock handoff is the subtle part:
+
+- First caller `P` targets a `RUNNABLE` process `C`.
+- `find_proc` returns with `C->lock` held.
+- `P` marks itself `SLEEPING`, releases `P->lock`, and switches directly to
+  `C`.
+- `C` resumes holding `C->lock`, which is the normal xv6 convention after a
+  scheduler-style context switch.
+- When `C` later calls `co_yield` back to `P`, it finds `P` sleeping, sets the
+  return values, releases `C->lock`, and switches directly to `P`.
+- `P` resumes holding `P->lock`, clears `chan`, releases `P->lock`, and returns
+  from the syscall.
 
 Why this matters:
 
@@ -906,10 +922,15 @@ user/usys.pl
 user/helloworld.c
 user/memsize_test.c
 user/co_test.c
+user/co_error_test.c
 ```
 
 `user/co_test.c` is important because the assignment explicitly asks for the
 test program.
+
+`user/co_error_test.c` is not the main graded test, but it directly documents
+the error-condition checks we performed. Keep it in the submission unless the
+staff explicitly asks for only `co_test.c`.
 
 ### Files To Exclude From The Submission
 
@@ -952,43 +973,28 @@ mkfs/mkfs
 
 ### What About `co_error_test.c`?
 
-`user/co_error_test.c` is our optional manual test. It is not required by the
-PDF.
-
-There are two acceptable choices:
-
-1. Keep it in the submission.
-
-   This is fine technically because it builds and does not change the required
-   behavior. If we keep it, the `Makefile` line:
-
-```make
-$U/_co_error_test\
-```
-
-   must also stay.
-
-2. Remove it from the final submission for a cleaner package.
-
-   If we remove `user/co_error_test.c`, we must also remove this line from
-   `UPROGS` in `Makefile`:
-
-```make
-$U/_co_error_test\
-```
-
-   Otherwise `make qemu` will fail because the Makefile will try to build a
-   program whose source file is missing.
-
-Our recommendation for the final Moodle package is the clean option:
+`user/co_error_test.c` is our error-case test. It checks:
 
 ```text
-exclude user/co_error_test.c
-remove $U/_co_error_test\ from Makefile in the final submission copy
+non-existent PID
+self-yield
+killed PID
 ```
 
-Do this only in the final packaging copy or final submission branch. Keep the
-test in our working branch if we still want it for checking.
+The PDF explicitly asks us to test error conditions. It also says to submit a
+copy of xv6 with `co_test.c` and modified files; it does not say extra test
+programs are forbidden.
+
+Recommendation: keep `user/co_error_test.c` in the final submission and keep
+the matching `Makefile` line:
+
+```make
+$U/_co_error_test\
+```
+
+If we later choose to remove it, we must remove both the source file and the
+`Makefile` entry. Otherwise `make qemu` will fail because the Makefile will try
+to build a missing source file.
 
 ### Exact Final Packaging Steps
 
@@ -997,43 +1003,31 @@ Before submitting:
 1. Decide which branch implementation to use after comparing with the teammate.
 2. Merge the final version into the submission branch or create a final
    packaging copy.
-3. If using the clean option, remove `co_error_test` from the final copy:
-
-```text
-delete user/co_error_test.c
-remove $U/_co_error_test\ from UPROGS in Makefile
-```
-
-4. Run:
+3. Run:
 
 ```sh
 make clean
 make qemu
 ```
 
-5. In xv6, run:
+4. In xv6, run:
 
 ```text
 helloworld
 memsize_test
+co_error_test
 co_test
 ```
 
-If `co_error_test` is still included in the final copy, it is also fine to run:
-
-```text
-co_error_test
-```
-
-6. Exit QEMU.
-7. Run:
+5. Exit QEMU.
+6. Run:
 
 ```sh
 make clean
 ```
 
-8. Create the ZIP/TAR from the cleaned source tree.
-9. Make sure the ZIP/TAR does not include:
+7. Create the ZIP/TAR from the cleaned source tree.
+8. Make sure the ZIP/TAR does not include:
 
 ```text
 .git/
@@ -1047,7 +1041,7 @@ local_tests/
 build artifacts
 ```
 
-10. Submit that package to Moodle.
+9. Submit that package to Moodle.
 
 ### Practical Packaging Command Sequence
 
@@ -1074,14 +1068,6 @@ cd xv6-riscv-submit
 make clean
 ```
 
-If we choose the clean option without `co_error_test`, also do this in the
-copied folder:
-
-```text
-delete user/co_error_test.c
-remove $U/_co_error_test\ from UPROGS in Makefile
-```
-
 Then verify the copied folder still builds:
 
 ```sh
@@ -1093,6 +1079,7 @@ Inside xv6, run:
 ```text
 helloworld
 memsize_test
+co_error_test
 co_test
 ```
 

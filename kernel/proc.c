@@ -556,8 +556,8 @@ co_yield(int pid, int value)
     return ret;
   }
 
-  // First side to arrive waits until the peer calls co_yield back.
-  if(target->state != RUNNABLE && target->state != RUNNING){
+  // First side to arrive parks itself and runs the peer directly.
+  if(target->state != RUNNABLE){
     release(&target->lock);
     return -1;
   }
@@ -574,8 +574,11 @@ co_yield(int pid, int value)
   p->chan = co_chan(target);
   p->state = SLEEPING;
 
-  release(&target->lock);
-  sched();
+  target->state = RUNNING;
+  mycpu()->proc = target;
+
+  release(&p->lock);
+  swtch(&p->context, &target->context);
 
   ret = p->trapframe->a0;
   p->chan = 0;

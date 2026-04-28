@@ -506,13 +506,21 @@ The parent:
 3. Stores `-1` in `trapframe->a0` as a pending return value.
 4. Sets `chan` to the child's private channel.
 5. Sets its own state to `SLEEPING`.
-6. Calls `sched()`.
+6. Sets the child to `RUNNING`.
+7. Updates `mycpu()->proc` to the child.
+8. Calls:
+
+```c
+swtch(&parent->context, &child->context);
+```
 
 At this point the parent is not `RUNNABLE`, so the normal scheduler will not
-choose it.
+choose it. The child is not chosen by the normal scheduler either; `co_yield`
+switches to it directly.
 
-This first sleep uses `sched()` because there is no peer ready yet. The direct
-handoff cannot happen until the other process also reaches `co_yield`.
+This matters because the staff clarified that the final solution should not use
+`sched()` inside `co_yield`. The first caller still sleeps, but the CPU is
+given directly to the target process so it can reach its own `co_yield`.
 
 ### Case 2: Second Process Arrives
 
@@ -653,7 +661,6 @@ conditions.
 Important xv6 rules:
 
 - A process's `state` and `chan` are protected by `p->lock`.
-- `sched()` must be called while holding only the current process's lock.
 - `swtch()` saves the current kernel context and restores another kernel
   context.
 - `acquire()` disables interrupts through `push_off()`.
@@ -662,8 +669,8 @@ In our direct handoff:
 
 - The target process lock is held across `swtch`.
 - The current process lock is released before switching away.
-- This matches xv6's convention that a process may resume from `sched()` while
-  its own lock is held.
+- This matches xv6's convention that a process resumes with its own lock held
+  and then releases it in the normal resume path.
 
 Why this matters:
 
@@ -829,9 +836,10 @@ No new process field or global table is used.
 
 ### How does `co_yield` bypass the scheduler?
 
-When both processes are ready, the kernel sets the target process to
-`RUNNING`, updates `mycpu()->proc`, and calls `swtch` directly from the current
-process context to the target process context.
+The kernel sets the target process to `RUNNING`, updates `mycpu()->proc`, and
+calls `swtch` directly from the current process context to the target process
+context. This happens both when the peer is already sleeping inside `co_yield`
+and when the first caller directly runs a `RUNNABLE` peer.
 
 ### Why is the scheduler still changed?
 

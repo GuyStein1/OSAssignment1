@@ -127,7 +127,6 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 
 UPROGS=\
 	$U/_cat\
-	$U/_co_error_test\
 	$U/_co_test\
 	$U/_echo\
 	$U/_helloworld\

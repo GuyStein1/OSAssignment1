@@ -33,10 +33,7 @@ main(int argc, char *argv[])
   int pid1;
   int pid2;
 
-  if(argc > 1 && strcmp(argv[1], "errors") == 0){
-    run_error_tests();
-    exit(0);
-  }
+  run_error_tests();
 
   pid1 = getpid();
   pid2 = fork();

@@ -3,7 +3,8 @@
 This file explains what we changed for Assignment 1, why each change exists,
 and what we should be ready to explain in the grading session.
 
-The branch with our implementation is `stein`.
+The final implementation is merged into `main`. The `stein` branch contains the
+same final assignment code.
 
 Source files to study with this README:
 
@@ -29,8 +30,8 @@ Implemented tasks:
 - Task 1: `helloworld` user program.
 - Task 2: `memsize()` system call and `memsize_test`.
 - Task 3: `co_yield(pid, value)` system call and `co_test`.
-- Extra helper: `co_error_test`, for manual error-case checks. This is useful
-  for us, but it is not required for the final Moodle submission.
+- The three required Task 3 error checks live in `co_test errors`, so there is
+  no separate `co_error_test` program in the final version.
 
 Important commands:
 
@@ -43,7 +44,7 @@ Inside xv6:
 ```sh
 helloworld
 memsize_test
-co_error_test
+co_test errors
 co_test
 ```
 
@@ -228,10 +229,7 @@ Main files:
 
 - `user/co_test.c`
   - Required Task 3 test program from the PDF.
-
-- `user/co_error_test.c`
-  - Extra test program for error cases.
-  - Good for local testing, but not required by the assignment.
+  - Also supports `co_test errors` for the three required error cases.
 
 ## How xv6 System Calls Work
 
@@ -648,7 +646,7 @@ published separately. If asked about it, do not say it came from the Moodle Q&A.
 - Target is in a state that is not useful for this limited two-process
   coroutine test.
 
-`user/co_error_test.c` checks:
+`user/co_test.c` also has an error-test mode:
 
 ```text
 invalid pid: -1
@@ -656,8 +654,13 @@ self yield: -1
 killed target: -1
 ```
 
-This file is not required by the PDF, but it helps us verify the listed error
-conditions.
+Run it inside xv6 with:
+
+```text
+co_test errors
+```
+
+Plain `co_test` still runs the PDF's infinite parent/child handoff test.
 
 ## Locking Notes
 
@@ -709,7 +712,7 @@ Then inside xv6:
 ```text
 helloworld
 memsize_test
-co_error_test
+co_test errors
 usertests -q
 co_test
 ```
@@ -922,15 +925,11 @@ user/usys.pl
 user/helloworld.c
 user/memsize_test.c
 user/co_test.c
-user/co_error_test.c
 ```
 
 `user/co_test.c` is important because the assignment explicitly asks for the
-test program.
-
-`user/co_error_test.c` is not the main graded test, but it directly documents
-the error-condition checks we performed. Keep it in the submission unless the
-staff explicitly asks for only `co_test.c`.
+test program. The error-condition checks are in the same program under
+`co_test errors`.
 
 ### Files To Exclude From The Submission
 
@@ -939,6 +938,8 @@ the final Moodle package:
 
 ```text
 .git/
+.DS_Store
+.claude/
 ASSIGNMENT_README.md
 moodle_qa.md
 os262-assignment1.pdf
@@ -971,9 +972,18 @@ user/*.sym
 mkfs/mkfs
 ```
 
-### What About `co_error_test.c`?
+### Why There Is No Separate `co_error_test.c`
 
-`user/co_error_test.c` is our error-case test. It checks:
+The PDF asks for the Task 3 test code in `user/co_test.c`, and it also asks us
+to test error conditions. To keep the final submission simple, `user/co_test.c`
+supports two modes:
+
+```text
+co_test
+co_test errors
+```
+
+Plain `co_test` runs the PDF's infinite handoff test. `co_test errors` checks:
 
 ```text
 non-existent PID
@@ -981,20 +991,8 @@ self-yield
 killed PID
 ```
 
-The PDF explicitly asks us to test error conditions. It also says to submit a
-copy of xv6 with `co_test.c` and modified files; it does not say extra test
-programs are forbidden.
-
-Recommendation: keep `user/co_error_test.c` in the final submission and keep
-the matching `Makefile` line:
-
-```make
-$U/_co_error_test\
-```
-
-If we later choose to remove it, we must remove both the source file and the
-`Makefile` entry. Otherwise `make qemu` will fail because the Makefile will try
-to build a missing source file.
+This keeps the required handoff test and the required error tests in one
+userspace program.
 
 ### Exact Final Packaging Steps
 
@@ -1015,7 +1013,7 @@ make qemu
 ```text
 helloworld
 memsize_test
-co_error_test
+co_test errors
 co_test
 ```
 
@@ -1047,11 +1045,15 @@ build artifacts
 
 One clean way is to make a temporary copy outside the repo and zip that copy.
 
-From the parent directory of `xv6-riscv`:
+From the parent directory of `xv6-riscv`, create a clean copy whose top-level
+folder is still named `xv6-riscv`:
 
 ```sh
-rsync -a xv6-riscv/ xv6-riscv-submit/ \
+mkdir -p /tmp/os262-submit
+rsync -a xv6-riscv/ /tmp/os262-submit/xv6-riscv/ \
   --exclude='.git' \
+  --exclude='.DS_Store' \
+  --exclude='.claude' \
   --exclude='ASSIGNMENT_README.md' \
   --exclude='moodle_qa.md' \
   --exclude='os262-assignment1.pdf' \
@@ -1064,7 +1066,7 @@ rsync -a xv6-riscv/ xv6-riscv-submit/ \
 Then, inside the copied folder:
 
 ```sh
-cd xv6-riscv-submit
+cd /tmp/os262-submit/xv6-riscv
 make clean
 ```
 
@@ -1079,7 +1081,7 @@ Inside xv6, run:
 ```text
 helloworld
 memsize_test
-co_error_test
+co_test errors
 co_test
 ```
 
@@ -1087,11 +1089,11 @@ Exit QEMU, clean again, and zip:
 
 ```sh
 make clean
-cd ..
-zip -r OSAssignment1.zip xv6-riscv-submit
+cd /tmp/os262-submit
+zip -r xv6-riscv.zip xv6-riscv
 ```
 
-The ZIP should contain `xv6-riscv-submit/` with the source code inside it.
+The ZIP should contain `xv6-riscv/` with the source code inside it.
 
 ### Final Sanity Check
 

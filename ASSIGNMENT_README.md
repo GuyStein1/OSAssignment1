@@ -30,8 +30,9 @@ Implemented tasks:
 - Task 1: `helloworld` user program.
 - Task 2: `memsize()` system call and `memsize_test`.
 - Task 3: `co_yield(pid, value)` system call and `co_test`.
-- The three required Task 3 error checks live in `co_test errors`, so there is
-  no separate `co_error_test` program in the final version.
+- The three required Task 3 error checks run at the start of `co_test`
+  (before the PDF ping-pong loop), so there is no separate `co_error_test`
+  program in the final version.
 
 Important commands:
 
@@ -44,7 +45,6 @@ Inside xv6:
 ```sh
 helloworld
 memsize_test
-co_test errors
 co_test
 ```
 
@@ -229,7 +229,8 @@ Main files:
 
 - `user/co_test.c`
   - Required Task 3 test program from the PDF.
-  - Also supports `co_test errors` for the three required error cases.
+  - Runs the three required error cases first, then enters the PDF
+    parent/child handoff loop.
 
 ## How xv6 System Calls Work
 
@@ -646,21 +647,20 @@ published separately. If asked about it, do not say it came from the Moodle Q&A.
 - Target is in a state that is not useful for this limited two-process
   coroutine test.
 
-`user/co_test.c` also has an error-test mode:
+`user/co_test.c` also runs the three required error cases at the very start,
+before entering the PDF handoff loop. Inside xv6 a plain `co_test` prints:
 
 ```text
 invalid pid: -1
 self yield: -1
 killed target: -1
+parent received: 1
+Child received: 2
+...
 ```
 
-Run it inside xv6 with:
-
-```text
-co_test errors
-```
-
-Plain `co_test` still runs the PDF's infinite parent/child handoff test.
+The error lines come from `run_error_tests()` called unconditionally at the
+top of `main()`. The PDF infinite parent/child loop runs immediately after.
 
 ## Locking Notes
 
@@ -712,7 +712,6 @@ Then inside xv6:
 ```text
 helloworld
 memsize_test
-co_test errors
 usertests -q
 co_test
 ```
@@ -756,16 +755,7 @@ test prints `OK` and eventually `ALL TESTS PASSED`.
 
 ## Optional Local Tests
 
-We also keep extra tests in:
-
-```text
-local_tests/
-```
-
-These are not part of the assignment. They are for us when we change code and
-want a quick confidence check.
-
-The current local test is:
+We keep an extra stress test source file for our own use:
 
 ```text
 local_tests/co_stress_test.c
@@ -776,38 +766,12 @@ It checks 2000 coroutine handoffs in two cases:
 - Parent reaches `co_yield` first.
 - Child reaches `co_yield` first.
 
-Normal builds do not include it:
-
-```sh
-make qemu
-```
-
-To include the optional test, run:
-
-```sh
-make clean
-EXTRA_TESTS=1 make qemu
-```
-
-Inside xv6:
-
-```text
-co_stress_test
-```
-
-Expected output:
-
-```text
-parent-first: passed 2000 handoffs
-child-first: passed 2000 handoffs
-co_stress_test: passed
-```
-
-After running optional tests:
-
-```sh
-make clean
-```
+Status: the Makefile plumbing that built this test (`EXTRA_TESTS=1` flag,
+`EXTRA_TEST_BINS`, the `_co_stress_test` rule) was stripped from the
+final Makefile to keep the submission diff minimal. The source still
+lives in `local_tests/` for reference. To run it again locally, restore
+the build rule (a few lines: an `_co_stress_test` target that links from
+`local_tests/co_stress_test.o`, and an entry in `UPROGS`).
 
 For final Moodle submission, exclude `local_tests/`.
 
@@ -928,8 +892,8 @@ user/co_test.c
 ```
 
 `user/co_test.c` is important because the assignment explicitly asks for the
-test program. The error-condition checks are in the same program under
-`co_test errors`.
+test program. The error-condition checks are in the same program: they run
+unconditionally at the start of `main()`, before the PDF handoff loop.
 
 ### Files To Exclude From The Submission
 
@@ -975,15 +939,10 @@ mkfs/mkfs
 ### Why There Is No Separate `co_error_test.c`
 
 The PDF asks for the Task 3 test code in `user/co_test.c`, and it also asks us
-to test error conditions. To keep the final submission simple, `user/co_test.c`
-supports two modes:
+to test error conditions. To keep the final submission simple, both live in
+`user/co_test.c`. Running `co_test` inside xv6:
 
-```text
-co_test
-co_test errors
-```
-
-Plain `co_test` runs the PDF's infinite handoff test. `co_test errors` checks:
+1. First runs `run_error_tests()`, which checks:
 
 ```text
 non-existent PID
@@ -991,8 +950,10 @@ self-yield
 killed PID
 ```
 
-This keeps the required handoff test and the required error tests in one
-userspace program.
+2. Then enters the PDF's infinite parent/child handoff loop.
+
+A grader who runs `co_test` without arguments sees both. There is no separate
+mode or argv flag.
 
 ### Exact Final Packaging Steps
 
@@ -1013,7 +974,6 @@ make qemu
 ```text
 helloworld
 memsize_test
-co_test errors
 co_test
 ```
 
@@ -1081,7 +1041,6 @@ Inside xv6, run:
 ```text
 helloworld
 memsize_test
-co_test errors
 co_test
 ```
 

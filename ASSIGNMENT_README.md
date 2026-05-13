@@ -360,19 +360,67 @@ memory after free: 81920 bytes
 
 Why it does not increase by exactly 20000:
 
-- xv6 `malloc` is a user-space allocator.
-- It asks the kernel for memory using `sbrk`.
-- xv6's allocator requests memory in chunks, not necessarily exactly the user
-  requested size.
-- In this case, allocating 20000 bytes caused the process size to grow by a
-  larger chunk.
+**What `sbrk` is:**
+
+`sbrk(n)` is a syscall that extends the process heap by `n` bytes. The heap has
+an end pointer called the "program break." `sbrk` moves that pointer up by `n`
+and returns the old pointer. The kernel then allocates whatever pages are needed
+to cover the new heap range. `malloc` is built on top of `sbrk`.
+
+**Two separate reasons the growth is larger than 20000:**
+
+*Reason 1 — page granularity:*
+
+The kernel allocates physical memory one page at a time (4096 bytes per page).
+If `sbrk(20000)` were called directly, the kernel would allocate 5 pages =
+20480 bytes. So even a direct `sbrk` grows memory more than requested.
+
+*Reason 2 — `morecore` minimum chunk size (the bigger effect):*
+
+`malloc(20000)` does not call `sbrk(20000)`. When the free list is empty,
+`malloc` calls `morecore`, which enforces a minimum of 4096 *header units* per
+`sbrk` call (see `umalloc.c` line 52-53). This avoids paying the syscall cost
+on every small allocation.
+
+Each `Header` on riscv64 is 16 bytes:
+- `union header *ptr`: 8 bytes (64-bit pointer)
+- `uint size`: 4 bytes
+- 4 bytes padding (to align the struct to 8 bytes)
+
+So the minimum `sbrk` call is:
+
+```
+4096 units × 16 bytes/unit = 65536 bytes = 16 pages
+```
+
+Allocating 20000 bytes only needs ~1251 header units, which is below the 4096
+minimum, so `morecore` bumps it to 4096 and calls `sbrk(65536)`. That is why
+`p->sz` grows from 16384 to 81920 (a jump of 65536 bytes).
+
+The 4096 minimum is a K&R design choice for amortizing syscall overhead. It
+happens to share the same number as the page size but they are measuring
+different things: one is header units, the other is bytes.
+
+**Why the second `malloc(20000)` does not grow memory further:**
+
+After the first `malloc(20000)`, roughly 65536 − 20016 = 45520 bytes remain in
+the free list. The second `malloc(20000)` finds enough space there and carves
+from it without calling `sbrk`. The process size stays the same until the free
+list is exhausted again.
 
 Why `free()` does not reduce `memsize()`:
 
 - `free()` returns memory to the user-space allocator's free list.
-- It does not necessarily call `sbrk` with a negative value.
+- It does not call `sbrk` with a negative value.
 - Therefore the process still owns the same amount of memory from the kernel's
   perspective.
+
+A useful mental model: `sbrk` is a one-way ratchet — it only moves up. `malloc`
+and `free` manage a pool *within* the space already claimed from the kernel.
+After `free`, the allocator marks that chunk as available again, so the next
+`malloc` can reuse it without calling `sbrk`. The kernel only ever sees the
+high-water mark. `memsize()` reads that high-water mark, so it stays at 81920
+whether or not the allocation has been freed.
 
 What to know for grading:
 
@@ -697,6 +745,288 @@ Why this matters:
   switch.
 - The target resumes in a state where it can safely finish its syscall and
   release its lock.
+
+## Implementation Code Walkthrough
+
+This section walks through every piece of code we wrote for Task 3, in the
+order it executes at runtime.
+
+---
+
+### 1. `sys_co_yield` — the syscall entry point (`kernel/sysproc.c`)
+
+```c
+uint64
+sys_co_yield(void)
+{
+  int pid;
+  int value;
+
+  argint(0, &pid);   // read first argument (pid) from trapframe->a0
+  argint(1, &value); // read second argument (value) from trapframe->a1
+  return co_yield(pid, value);
+}
+```
+
+This is just a thin wrapper. Every syscall in xv6 has one of these in
+`sysproc.c`. Its only job is to extract the arguments from the trapframe
+registers (where the user-space `ecall` put them) and forward them to the
+real implementation in `proc.c`.
+
+---
+
+### 2. `co_chan` — the private sleep channel (`kernel/proc.c`)
+
+```c
+static void*
+co_chan(struct proc *p)
+{
+  return (void*)&p->context;
+}
+```
+
+xv6's sleep/wakeup mechanism identifies *why* a process is sleeping by a
+channel: a pointer-sized value stored in `p->chan`. Two processes sleeping
+on the same channel can be woken together.
+
+We need a channel that means "sleeping inside co_yield waiting for process
+P". We use the address of P's `context` struct. That address is:
+
+- Unique per process (it lives inside the `struct proc` array).
+- Never used by any normal xv6 sleep/wakeup call.
+
+So if we see `p->chan == co_chan(target)`, it unambiguously means "P is
+sleeping inside `co_yield`, waiting for `target` to arrive."
+
+---
+
+### 3. `find_proc` — locate and lock the target (`kernel/proc.c`)
+
+```c
+static struct proc*
+find_proc(int pid)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);           // lock before reading any fields
+    if(p->pid == pid && p->state != UNUSED)
+      return p;                  // return with lock still held
+    release(&p->lock);
+  }
+
+  return 0;                      // not found
+}
+```
+
+We scan the global process table looking for a process whose PID matches
+and that is not `UNUSED` (a slot that has never been used or was freed).
+
+The important detail: we return with the lock **still held**. The caller is
+responsible for releasing it. This is the standard xv6 pattern for
+"find and inspect" — you hold the lock while you read and modify the
+process's fields, then release when you're done.
+
+---
+
+### 4. `co_yield` — the main logic (`kernel/proc.c`)
+
+```c
+int
+co_yield(int pid, int value)
+{
+  struct proc *p = myproc();   // the calling process
+  struct proc *target;
+  int ret;
+```
+
+`myproc()` returns the currently running process on this CPU. `p` is the
+caller, `target` will be the process we want to hand off to.
+
+#### Input validation
+
+```c
+  if(pid <= 0 || pid == p->pid)
+    return -1;
+
+  target = find_proc(pid);
+  if(target == 0)
+    return -1;
+
+  if(target->killed || target->state == UNUSED || target->state == ZOMBIE){
+    release(&target->lock);
+    return -1;
+  }
+```
+
+We reject:
+- Invalid PIDs (zero, negative, self).
+- PIDs that don't exist in the process table.
+- Processes that are killed, unused, or already zombie (exited but not yet
+  reaped). There is no point handing off to a dead process.
+
+After `find_proc` returns, `target->lock` is held. If we return early due
+to an error we must release it first.
+
+#### Case 1 — peer is already sleeping (second caller arrives)
+
+```c
+  if(target->state == SLEEPING){
+    if(target->chan != co_chan(p)){
+      // Target is sleeping, but NOT waiting for us specifically.
+      release(&target->lock);
+      return -1;
+    }
+
+    acquire(&p->lock);
+    if(p->killed){
+      release(&p->lock);
+      release(&target->lock);
+      return -1;
+    }
+```
+
+The target is SLEEPING and its channel is `co_chan(p)`, which means it fell
+asleep inside `co_yield` waiting specifically for us. We are the second
+process to arrive at the rendezvous.
+
+We now hold both locks: `target->lock` and `p->lock`.
+
+```c
+    // Exchange values.
+    p->trapframe->a1 = value;                      // save our outgoing value
+    p->trapframe->a0 = target->trapframe->a1;      // we receive what target saved
+    if(target->trapframe->a0 == (uint64)-1)
+      target->trapframe->a0 = value;               // give target our value as its return
+```
+
+Each process stores its outgoing value in `trapframe->a1` (the second
+argument register). The return value goes into `trapframe->a0` (the return
+value register). When the process resumes from `swtch` and eventually
+returns from the syscall, the kernel puts `trapframe->a0` in the return
+register automatically.
+
+The `-1` check: when the first caller slept (Case 2 below), it set its own
+`a0` to `-1` as a placeholder meaning "not answered yet". The second caller
+fills it in here.
+
+```c
+    // Do the direct handoff.
+    p->chan = co_chan(target);  // mark us as sleeping, waiting for target
+    p->state = SLEEPING;
+    target->state = RUNNING;
+    target->chan = 0;           // clear target's wait marker — it's awake now
+    mycpu()->proc = target;     // tell the CPU it's now running target
+
+    release(&p->lock);
+    swtch(&p->context, &target->context);  // jump to target's kernel stack
+```
+
+`swtch` saves all callee-saved registers into `p->context` and restores
+them from `target->context`. Execution continues inside `target` from
+wherever it last called `swtch` — which is inside `co_yield`, right after
+its own `swtch` call.
+
+```c
+    // We resume here when someone later co_yields back to us.
+    ret = p->trapframe->a0;   // read the return value that was placed for us
+    p->chan = 0;
+    release(&p->lock);
+    return ret;
+  }
+```
+
+When we eventually wake up (the next time the peer calls `co_yield` back),
+we resume right after the `swtch`. At that point our return value has
+already been written into `p->trapframe->a0` by whoever woke us.
+
+#### Case 2 — peer is RUNNABLE (first caller arrives)
+
+```c
+  if(target->state != RUNNABLE){
+    release(&target->lock);
+    return -1;
+  }
+
+  acquire(&p->lock);
+  if(p->killed){
+    release(&p->lock);
+    release(&target->lock);
+    return -1;
+  }
+```
+
+The target is RUNNABLE — it hasn't called `co_yield` yet. We are the first
+to arrive. We reject any other state (e.g. target is already SLEEPING on
+something unrelated, or RUNNING on another CPU).
+
+```c
+  p->trapframe->a1 = value;   // save our outgoing value for when target arrives
+  p->trapframe->a0 = -1;      // placeholder: "nobody has given me a return value yet"
+  p->chan = co_chan(target);   // mark us as sleeping, waiting for target
+  p->state = SLEEPING;
+
+  target->state = RUNNING;    // skip RUNNABLE — direct switch, no scheduler
+  mycpu()->proc = target;     // tell the CPU it's now running target
+
+  release(&p->lock);
+  swtch(&p->context, &target->context);  // jump directly to target
+```
+
+We park ourselves as SLEEPING and run the target directly. The target is
+now RUNNING without ever having been picked by the scheduler. It will
+eventually call `co_yield` back, find us sleeping (Case 1), do the value
+exchange, and wake us.
+
+```c
+  ret = p->trapframe->a0;   // value filled in by the peer when it woke us
+  p->chan = 0;
+  release(&p->lock);
+  return ret;
+}
+```
+
+Same resume path as Case 1.
+
+---
+
+### 5. Modified `scheduler` (`kernel/proc.c`)
+
+The only change to the existing scheduler is this:
+
+```c
+// Original xv6:
+// release(&p->lock);
+
+// Our version:
+ran = c->proc;
+c->proc = 0;
+release(&ran->lock);
+```
+
+**Why this matters:**
+
+The normal xv6 scheduler loop picks process `p`, switches to it, and when
+it comes back releases `p->lock`. That works when `p` is the process that
+returns to the scheduler.
+
+With direct switching, a different process can return to the scheduler
+frame that originally ran `p`. Example:
+
+```
+scheduler picks process B
+B calls co_yield, switches directly to A
+A finishes and returns to the scheduler
+```
+
+Now the scheduler frame that ran `B` is resumed by `A`. If it releases
+`p->lock` (B's lock), it panics with `panic: release` because the CPU does
+not hold B's lock — it holds A's lock.
+
+The fix: instead of releasing `p->lock`, release `c->proc->lock` — the
+lock of whichever process is actually on the CPU right now. That is always
+the process that returned to this scheduler frame, regardless of whether
+it was the original `p` or someone else.
 
 ## What We Tested
 
